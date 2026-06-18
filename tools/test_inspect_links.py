@@ -427,17 +427,38 @@ class TestDanglingDescription:
             f"{bad_warns}"
         )
 
-    def test_short_trailing_punctuation_is_allowed(self):
-        # A stray period or comma right after the closing paren is harmless
-        # punctuation, not a description. Don't false-positive on it.
+    @pytest.mark.parametrize("punct", [".", ",", ":", ";"])
+    def test_stray_trailing_punctuation_warns(self, punct):
+        # Anything after the closing paren is a sign the bullet wasn't
+        # formatted to convention — even bare punctuation. The corpus has
+        # only a handful of these historically and they're stylistic
+        # inconsistencies. The --since diff filter protects against
+        # firing on existing content.
         html = _md(
-            """
+            f"""
             ## Updates from Rust Community
-            * [some link](https://example.com/x).
+            * [some link](https://example.com/x){punct}
             """
         )
         inspect_links.extract_links(html)
-        assert not any(
+        assert any(
+            "dangling" in w.lower() or "trailing" in w.lower() for w in _warns()
+        ), f"expected stray {punct!r} to be flagged"
+
+    def test_parenthetical_tag_after_link_is_flagged(self):
+        # A few historical bullets use trailing parens like '(series)' or
+        # '(proof language for/using Rust)'. Going forward, that
+        # information belongs inside the link text or as a bracketed
+        # pre-anchor prefix ('[series]'), which is the established
+        # convention. Flag them.
+        html = _md(
+            """
+            ## Updates from Rust Community
+            * [Some Talk](https://example.com/x) (series)
+            """
+        )
+        inspect_links.extract_links(html)
+        assert any(
             "dangling" in w.lower() or "trailing" in w.lower() for w in _warns()
         )
 
