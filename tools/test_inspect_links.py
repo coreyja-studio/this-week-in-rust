@@ -317,25 +317,53 @@ class TestDanglingDescription:
             "dangling" in w.lower() or "trailing" in w.lower() for w in warns
         ), f"expected a warning about trailing text, got: {warns}"
 
-    def test_video_prefix_is_allowed(self):
-        # `* [video] [Title](url)` is a documented convention; the leading
-        # `[video]` text before the anchor should not be flagged.
+    @pytest.mark.parametrize(
+        "prefix",
+        [
+            # Most common, documented in template comments.
+            "[video]",
+            "[audio]",
+            # Also common and well-established in the corpus.
+            "[series]",
+            # Language codes used for non-English content.
+            "[DE]",
+            "[ZH]",
+            "[FR]",
+            "[ES]",
+            "[PT]",
+            # Combinations of tags.
+            "[series] [video]",
+            "[ZH] [series]",
+            # Case variants seen in the wild.
+            "[Video]",
+            "[Audio]",
+        ],
+    )
+    def test_pre_anchor_prefix_tags_are_allowed(self, prefix):
+        # The dangling-description check looks at content AFTER the link,
+        # so any pre-anchor tag prefix should pass through cleanly. The
+        # corpus uses a wide variety of these (video/audio/series/language
+        # codes/combinations) — we don't enforce a fixed allow-list.
         html = _md(
-            """
+            f"""
             ## Updates from Rust Community
-            * [video] [Some Talk Title](https://example.com/x)
+            * {prefix} [Some Title](https://example.com/x)
             """
         )
         inspect_links.extract_links(html)
         assert not any(
             "dangling" in w.lower() or "trailing" in w.lower() for w in _warns()
-        )
+        ), f"prefix {prefix!r} was incorrectly flagged"
 
-    def test_audio_prefix_is_allowed(self):
+    def test_multi_link_bullet_is_allowed(self):
+        # Bullets connecting two related links — e.g. "Part 1 | Part 2",
+        # "[A] and [B]", "[announcement] [migration guide]" — appear in
+        # the corpus. The check should only flag prose AFTER the LAST
+        # link in the bullet, not prose BETWEEN links.
         html = _md(
             """
             ## Updates from Rust Community
-            * [audio] [Some Podcast Episode](https://example.com/x)
+            * [Part 1](https://example.com/one) | [Part 2](https://example.com/two)
             """
         )
         inspect_links.extract_links(html)
