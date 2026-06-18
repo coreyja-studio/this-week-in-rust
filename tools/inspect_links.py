@@ -92,6 +92,42 @@ def check_suspicious(domain, url):
     diagnostics.warn(f"link {url} is to crates.io -- we do not usually include links directly to crates on crates.io; "
       "please double check our guidelines here: https://github.com/rust-lang/this-week-in-rust#projectstooling-updates")
 
+
+def check_dangling_description(li_tag):
+    """ Warn if a bullet has content after its last link.
+
+    TWIR convention is that the bullet's title and description belong
+    inside the link text, not trailing after the closing paren.
+
+    Bad : * [project_name](https://...): description of the project
+    Good: * [project_name: description of the project](https://...)
+
+    Tag prefixes like `[video]`, `[audio]`, `[series]`, and language
+    codes (`[DE]`, `[ZH]`, etc.) BEFORE the link are an established
+    convention and are not inspected here -- only content AFTER the
+    last link in the bullet.
+    """
+    anchors = li_tag.find_all('a')
+    if not anchors:
+        return
+    last_a = anchors[-1]
+
+    pieces = []
+    for sib in last_a.next_siblings:
+        if isinstance(sib, str):
+            pieces.append(str(sib))
+        else:
+            pieces.append(sib.get_text())
+    trailing = "".join(pieces).strip()
+
+    if trailing:
+        url = last_a.get('href', '<no href>')
+        warnings.warn(
+            f'link {url} has trailing content after the closing paren: '
+            f'{trailing!r} -- put the description inside the link text '
+            f'instead, e.g. `[title: description](url)`'
+        )
+
 def extract_links(html):
     """ Return a list of links from this file.
 
@@ -106,7 +142,7 @@ def extract_links(html):
 
     """
     strict_mode = False
-    tags = ['a', 'h1', 'h2', 'h3', 'h4']
+    tags = ['a', 'h1', 'h2', 'h3', 'h4', 'li']
     urls = []
 
     # Remember the header level (h2, h3, etc) when we turned on
@@ -121,6 +157,9 @@ def extract_links(html):
                 check_truncated_title(tag)
                 trimmed_url = parse_url(link)
                 urls.append(trimmed_url)
+        elif tag.name == 'li':
+            if strict_mode:
+                check_dangling_description(tag)
         else:
             level = tag.name
             if header_level and level > header_level:
