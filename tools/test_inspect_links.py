@@ -265,6 +265,156 @@ class TestExtractLinks:
 
 
 # ---------------------------------------------------------------------------
+# Dangling description after the link (issue #8155)
+#
+# TWIR convention is that the bullet should put the whole
+# "title: description" inside the link text, not split across the link
+# boundary. These tests document the desired warning behavior — see PR
+# #8111 for real-world examples of the cleanup these will catch.
+#
+#   Bad : * [project_name](https://...): description
+#   Good: * [project_name: description](https://...)
+# ---------------------------------------------------------------------------
+
+
+class TestDanglingDescription:
+    def test_well_formed_bullet_does_not_warn(self):
+        html = _md(
+            """
+            ## Updates from Rust Community
+            * [project_name: Description of the project](https://example.com/x)
+            """
+        )
+        inspect_links.extract_links(html)
+        assert not any("dangling" in w.lower() for w in _warns())
+
+    def test_bullet_with_trailing_colon_description_warns(self):
+        html = _md(
+            """
+            ## Updates from Rust Community
+            * [project_name](https://example.com/x): Description of the project
+            """
+        )
+        inspect_links.extract_links(html)
+        warns = _warns()
+        assert any(
+            "dangling" in w.lower() or "trailing" in w.lower() for w in warns
+        ), f"expected a warning about trailing description, got: {warns}"
+
+    def test_bullet_with_trailing_description_no_colon_warns(self):
+        # OmniScope in PR #8111 had `* [name](url): Description...` but
+        # also a variant where the trailing text didn't lead with a colon.
+        # Anything after the closing paren beyond whitespace is bad.
+        html = _md(
+            """
+            ## Updates from Rust Community
+            * [name](https://example.com/x) trailing description text
+            """
+        )
+        inspect_links.extract_links(html)
+        warns = _warns()
+        assert any(
+            "dangling" in w.lower() or "trailing" in w.lower() for w in warns
+        ), f"expected a warning about trailing text, got: {warns}"
+
+    def test_video_prefix_is_allowed(self):
+        # `* [video] [Title](url)` is a documented convention; the leading
+        # `[video]` text before the anchor should not be flagged.
+        html = _md(
+            """
+            ## Updates from Rust Community
+            * [video] [Some Talk Title](https://example.com/x)
+            """
+        )
+        inspect_links.extract_links(html)
+        assert not any(
+            "dangling" in w.lower() or "trailing" in w.lower() for w in _warns()
+        )
+
+    def test_audio_prefix_is_allowed(self):
+        html = _md(
+            """
+            ## Updates from Rust Community
+            * [audio] [Some Podcast Episode](https://example.com/x)
+            """
+        )
+        inspect_links.extract_links(html)
+        assert not any(
+            "dangling" in w.lower() or "trailing" in w.lower() for w in _warns()
+        )
+
+    def test_dangling_description_outside_strict_section_is_ignored(self):
+        # The check is scoped to strict sections, matching existing behavior
+        # of the inspector. Other sections may have prose-like formatting.
+        html = _md(
+            """
+            ## Crate of the Week
+            * [name](https://example.com/x): some description that would be
+              flagged in a strict section
+            """
+        )
+        inspect_links.extract_links(html)
+        assert not any(
+            "dangling" in w.lower() or "trailing" in w.lower() for w in _warns()
+        )
+
+    def test_warning_identifies_the_offending_link(self):
+        # The warning should include enough info to find the bullet —
+        # at minimum the URL or the link title.
+        html = _md(
+            """
+            ## Updates from Rust Community
+            * [ex_ratatui](https://hexdocs.pm/ex_ratatui): Elixir bindings for ratatui
+            """
+        )
+        inspect_links.extract_links(html)
+        bad_warns = [
+            w for w in _warns()
+            if "dangling" in w.lower() or "trailing" in w.lower()
+        ]
+        assert bad_warns, "expected at least one dangling-description warning"
+        joined = " ".join(bad_warns)
+        assert (
+            "ex_ratatui" in joined or "hexdocs.pm/ex_ratatui" in joined
+        ), f"warning should identify the bullet, got: {bad_warns}"
+
+    def test_multiple_bad_bullets_each_warn(self):
+        # PR #8111 had several bad bullets in one section — each should be
+        # flagged individually, not collapsed into one warning.
+        html = _md(
+            """
+            ## Updates from Rust Community
+            * [name_one](https://example.com/one): first description
+            * [name_two](https://example.com/two): second description
+            * [name_three](https://example.com/three): third description
+            """
+        )
+        inspect_links.extract_links(html)
+        bad_warns = [
+            w for w in _warns()
+            if "dangling" in w.lower() or "trailing" in w.lower()
+        ]
+        assert len(bad_warns) == 3, (
+            f"expected 3 dangling-description warnings, got {len(bad_warns)}: "
+            f"{bad_warns}"
+        )
+
+    def test_short_trailing_punctuation_is_allowed(self):
+        # A stray period or comma right after the closing paren is harmless
+        # punctuation, not a description. Don't false-positive on it.
+        html = _md(
+            """
+            ## Updates from Rust Community
+            * [some link](https://example.com/x).
+            """
+        )
+        inspect_links.extract_links(html)
+        assert not any(
+            "dangling" in w.lower() or "trailing" in w.lower() for w in _warns()
+        )
+
+
+# ---------------------------------------------------------------------------
 # inspect_file / inspect_files (duplicate detection)
 # ---------------------------------------------------------------------------
 
