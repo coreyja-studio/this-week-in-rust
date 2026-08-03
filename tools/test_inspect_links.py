@@ -19,15 +19,23 @@ import inspect_links
 
 
 @pytest.fixture(autouse=True)
-def reset_warnings():
-    """Clear the module-level warnings singleton between tests."""
-    inspect_links.warnings.get_and_clear()
+def reset_diagnostics():
+    """Clear the module-level diagnostics singleton between tests."""
+    inspect_links.diagnostics.drain_errors_and_warnings()
     yield
-    inspect_links.warnings.get_and_clear()
+    inspect_links.diagnostics.drain_errors_and_warnings()
 
 
 def _warns():
-    return inspect_links.warnings.get()
+    # Read the accumulated warnings without draining: the public
+    # drain_errors_and_warnings() clears as a side effect, and some tests inspect
+    # the warnings more than once.
+    return list(inspect_links.diagnostics._warnings)
+
+
+def _errors():
+    # Non-draining, for the same reason as _warns().
+    return list(inspect_links.diagnostics._errors)
 
 
 # ---------------------------------------------------------------------------
@@ -69,18 +77,20 @@ class TestCheckTruncatedTitle:
         title = "a" * 67 + "..."
         assert len(title) == 70
         inspect_links.check_truncated_title(self._link_tag(title))
-        assert any("truncated link title" in w for w in _warns())
+        assert any("may be unintentionally truncated" in w for w in _warns())
 
     def test_no_warning_when_title_is_69_chars(self):
         title = "a" * 66 + "..."
         assert len(title) == 69
         inspect_links.check_truncated_title(self._link_tag(title))
         assert _warns() == []
+        assert _errors() == []
 
     def test_no_warning_when_title_ends_without_ellipsis(self):
         title = "a" * 70
         inspect_links.check_truncated_title(self._link_tag(title))
         assert _warns() == []
+        assert _errors() == []
 
     def test_no_warning_when_unicode_ellipsis_is_used(self):
         # Documented workaround: replace "..." with "…"
@@ -88,6 +98,7 @@ class TestCheckTruncatedTitle:
         assert len(title) == 70
         inspect_links.check_truncated_title(self._link_tag(title))
         assert _warns() == []
+        assert _errors() == []
 
     def test_handles_empty_link_title(self):
         # <a href="..."></a> has tag.string == None — should not crash.
@@ -96,6 +107,7 @@ class TestCheckTruncatedTitle:
         ).a
         inspect_links.check_truncated_title(tag)
         assert _warns() == []
+        assert _errors() == []
 
 
 # ---------------------------------------------------------------------------
@@ -104,20 +116,20 @@ class TestCheckTruncatedTitle:
 
 
 class TestScrubParameters:
-    def test_strips_utm_source_and_warns(self):
+    def test_strips_utm_source_and_errors(self):
         result = inspect_links.scrub_parameters(
             "https://example.com/?utm_source=twitter", "utm_source=twitter"
         )
         assert result == ""
-        assert any("tracking parameters" in w for w in _warns())
+        assert any("tracking parameters" in e for e in _errors())
 
     def test_strips_all_known_utm_variants(self):
         query = "utm_source=a&utm_campaign=b&utm_medium=c&utm_content=d"
         result = inspect_links.scrub_parameters("https://example.com/?" + query, query)
         assert result == ""
-        # One warning that lists all four
-        assert len(_warns()) == 1
-        msg = _warns()[0]
+        # One error that lists all four
+        assert len(_errors()) == 1
+        msg = _errors()[0]
         for k in ("utm_source", "utm_campaign", "utm_medium", "utm_content"):
             assert k in msg
 
@@ -127,14 +139,15 @@ class TestScrubParameters:
         )
         assert result == "id=42"
         assert _warns() == []
+        assert _errors() == []
 
-    def test_mixed_keeps_non_utm_and_warns_on_utm(self):
+    def test_mixed_keeps_non_utm_and_errors_on_utm(self):
         result = inspect_links.scrub_parameters(
             "https://example.com/?id=42&utm_source=twitter",
             "id=42&utm_source=twitter",
         )
         assert result == "id=42"
-        assert any("utm_source" in w for w in _warns())
+        assert any("utm_source" in e for e in _errors())
 
 
 # ---------------------------------------------------------------------------
@@ -149,49 +162,52 @@ class TestParseUrl:
             == "https://example.com/path"
         )
         assert _warns() == []
+        assert _errors() == []
 
     def test_http_is_normalized_to_https_without_warning(self):
         # http -> https is silent; only canonicalization that would not
-        # round-trip the original gets a warning.
+        # round-trip the original is reported.
         assert (
             inspect_links.parse_url("http://example.com/path")
             == "https://example.com/path"
         )
         assert _warns() == []
+        assert _errors() == []
 
     def test_mailto_is_accepted(self):
-        # mailto links are valid; only schemes outside http/https/mailto warn.
+        # mailto links are valid; only schemes outside http/https/mailto error.
         inspect_links.parse_url("mailto:test@example.com")
-        assert not any("malformed link" in w for w in _warns())
+        assert not any("malformed link" in e for e in _errors())
 
-    def test_unknown_scheme_warns(self):
+    def test_unknown_scheme_errors(self):
         inspect_links.parse_url("ftp://example.com/file")
-        assert any("possibly malformed link" in w for w in _warns())
+        assert any("malformed link scheme" in e for e in _errors())
 
     def test_trailing_slash_is_stripped(self):
-        # Trailing slash is removed silently (no warning), because both
+        # Trailing slash is removed silently (no diagnostic), because both
         # forms canonicalize to the same URL.
         assert (
             inspect_links.parse_url("https://example.com/path/")
             == "https://example.com/path"
         )
 
-    def test_consecutive_slashes_warn_and_collapse(self):
+    def test_consecutive_slashes_error_and_collapse(self):
         result = inspect_links.parse_url("https://example.com/a//b")
         assert result == "https://example.com/a/b"
-        assert any("can be simplified" in w for w in _warns())
+        assert any("can be simplified" in e for e in _errors())
 
-    def test_tracking_parameters_are_stripped_and_warn(self):
+    def test_tracking_parameters_are_stripped_and_error(self):
         result = inspect_links.parse_url(
             "https://example.com/?utm_source=twitter"
         )
         assert result == "https://example.com"
-        assert any("tracking parameters" in w for w in _warns())
+        assert any("tracking parameters" in e for e in _errors())
 
     def test_non_tracking_query_is_preserved(self):
         result = inspect_links.parse_url("https://example.com/?id=42")
         assert result == "https://example.com?id=42"
         assert _warns() == []
+        assert _errors() == []
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +489,7 @@ class TestInspectFiles:
         path.write_text(textwrap.dedent(body))
         return str(path)
 
-    def test_no_warnings_for_unique_links(self, tmp_path):
+    def test_no_diagnostics_for_unique_links(self, tmp_path):
         f1 = self._write(
             tmp_path / "2026-01-01-this-week-in-rust.md",
             """
@@ -484,6 +500,7 @@ class TestInspectFiles:
         )
         inspect_links.inspect_files([f1])
         assert _warns() == []
+        assert _errors() == []
 
     def test_duplicate_within_same_file_is_flagged(self, tmp_path):
         f1 = self._write(
@@ -495,7 +512,7 @@ class TestInspectFiles:
             """,
         )
         inspect_links.inspect_files([f1])
-        assert any("possible duplicate link" in w for w in _warns())
+        assert any("possible duplicate link" in e for e in _errors())
 
     def test_duplicate_across_files_is_flagged(self, tmp_path):
         f1 = self._write(
@@ -513,14 +530,14 @@ class TestInspectFiles:
             """,
         )
         inspect_links.inspect_files([f1, f2])
-        warns = _warns()
+        errors = _errors()
         assert any(
-            "possible duplicate link" in w and "example.com" in w for w in warns
+            "possible duplicate link" in e and "example.com" in e for e in errors
         )
 
     def test_duplicate_outside_strict_section_is_ignored(self, tmp_path):
         # Links in non-strict sections (e.g. the masthead, "Jobs", etc.) may
-        # repeat across issues without warning.
+        # repeat across issues without a diagnostic.
         f1 = self._write(
             tmp_path / "2026-01-01-this-week-in-rust.md",
             """
@@ -537,6 +554,7 @@ class TestInspectFiles:
         )
         inspect_links.inspect_files([f1, f2])
         assert _warns() == []
+        assert _errors() == []
 
 
 # ---------------------------------------------------------------------------

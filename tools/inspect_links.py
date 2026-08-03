@@ -122,7 +122,7 @@ def check_dangling_description(li_tag):
 
     if trailing:
         url = last_a.get('href', '<no href>')
-        warnings.warn(
+        diagnostics.warn(
             f'link {url} has trailing content after the closing paren: '
             f'{trailing!r} -- put the description inside the link text '
             f'instead, e.g. `[title: description](url)`'
