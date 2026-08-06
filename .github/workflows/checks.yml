@@ -13,6 +13,28 @@ permissions:
   contents: read
 
 jobs:
+  Run-Tool-Tests:
+    name: Run Tool Unit Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Python dependencies
+        uses: py-actions/py-dependency-install@9c419aa98bfb42280bdae2b0a736befd9b01e3b1 # v4
+        with:
+          path: "tools/requirements.txt"
+          update-pip: "false"
+          update-setuptools: "false"
+          update-wheel: "false"
+      # pytest is a test-only dependency, so it is installed here rather than
+      # added to tools/requirements.txt, which the markdown checks also install.
+      - name: Install pytest
+        run: python3 -m pip install --disable-pip-version-check pytest==8.3.4
+      - name: Run tool tests
+        run: python3 -m pytest tools/ -q
+
   Run-Markdown-Checks:
     name: Run Markdown Checks
     runs-on: ubuntu-24.04
